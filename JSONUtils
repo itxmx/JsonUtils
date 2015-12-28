@@ -1,4 +1,4 @@
-package com.text.demo.util;
+package com.xmx.demo.util;
 
 import android.text.TextUtils;
 
@@ -6,6 +6,7 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import java.lang.reflect.Array;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
@@ -14,11 +15,9 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
 
-/**
- * xmx
- */
 public class JSONUtil {
 
     /**
@@ -39,6 +38,7 @@ public class JSONUtil {
             if (clazz.getName().contains("$")) {//判断是否是内部类
                 int start = 0;
                 int index;
+                //当有多层内部类时，创建外部类对象才能创建内部类
                 while ((index = clazz.getName().indexOf("$", start)) != -1) {
                     Class<?> aClass = Class.forName(clazz.getName().substring(0, index));
                     start = index + 1;
@@ -64,11 +64,12 @@ public class JSONUtil {
             fields.addAll(thisFields);
             Class<? super T> superclass = clazz.getSuperclass();//获取父类的Class
 
-            while (superclass != null && !superclass.getName().equals("java.lang.Object")){
+            //判断父类中是否和子类的属性重复了，重复则抛出提示错误
+            while (superclass != null && !superclass.getName().equals("java.lang.Object")) {
                 List<Field> superFields = Arrays.asList(superclass.getDeclaredFields());
-                for (int i = 0; i < superFields.size(); i++){
-                    for (int j = 0; j < fields.size(); j++){
-                        if(fields.get(j).getName().equals(superFields.get(i).getName())){
+                for (int i = 0; i < superFields.size(); i++) {
+                    for (int j = 0; j < fields.size(); j++) {
+                        if (fields.get(j).getName().equals(superFields.get(i).getName())) {
                             throw new RuntimeException("父类中的属性和子类的重复了");
                         }
                     }
@@ -103,24 +104,38 @@ public class JSONUtil {
                         field.setLong(t, jsonObject.optLong(field.getName()));
                     } else if (type.equals("float") || type.equals("java.lang.Float")) {
                         field.setFloat(t, (float) jsonObject.optDouble(field.getName()));
-                    } else if (type.contains("java.util.") && type.contains("List")) {
+                    } else if(type.equals("java.util.Date")){
+                        Date date = new Date();
+                        date.setTime(Long.parseLong(jsonObject.optString(field.getName())));
+                        field.set(t,date);
+                    }else if ((type.contains("java.util.") && type.contains("List")) || field.getType().isArray()) {//判断是集合还是数组
                         JSONArray jsonArray = jsonObject.optJSONArray(field.getName());
                         if (jsonArray != null && !jsonArray.toString().equals("[]")) {
-                            List<Object> list = (List<Object>) Class.forName(type).newInstance();
-                            Type genericType = field.getGenericType();//获取List的类型和泛型类型
-                            if (genericType == null) {
-                                continue;
+                            ArrayList<Object> list = new ArrayList<Object>();
+                            Class componentType;
+                            if (field.getType().isArray()) {//判断是否是数组
+                                componentType = field.getType().getComponentType();//获取数组的类型
+                            } else {
+                                Type genericType = field.getGenericType();//获取List的类型和泛型类型
+                                if (genericType == null) {
+                                    continue;
+                                }
+                                ParameterizedType pt = (ParameterizedType) genericType;//获取List的泛型
+                                componentType = (Class) pt.getActualTypeArguments()[0];
                             }
-                            ParameterizedType pt = (ParameterizedType) genericType;//获取List的泛型
                             for (int i = 0; i < jsonArray.length(); i++) {
                                 Object opt = jsonArray.opt(i);
                                 if (opt instanceof JSONObject) {//如果是jsonObject说明泛型是类
-                                    list.add(jsonToBean(opt.toString(), (Class) pt.getActualTypeArguments()[0]));
+                                    list.add(jsonToBean(opt.toString(), componentType));
                                 } else {
                                     list.add(opt);
                                 }
                             }
-                            field.set(t, list);
+                            if (field.getType().isArray()) {
+                                setFieldArray(field, list, t);
+                            } else {
+                                field.set(t, list);
+                            }
                         }
                     } else if (field.getClass() instanceof Object) {
                         //如果是对象，则递归继续给该对象的属性赋值
@@ -129,24 +144,88 @@ public class JSONUtil {
                             field.set(t, object);
                     }
                 } catch (IllegalAccessException e) {//不能调用e.printStackTrace()抛异常，这样会退出循环，后续的值就没有赋值
-
                 } catch (ClassNotFoundException e) {
-
                 }
             }
         } catch (InstantiationException e) {
             e.printStackTrace();
+            t = null;
         } catch (JSONException e) {
             e.printStackTrace();
+            t = null;
         } catch (IllegalAccessException e) {
             e.printStackTrace();
+            t = null;
         } catch (NoSuchMethodException e) {
             e.printStackTrace();
+            t = null;
         } catch (ClassNotFoundException e) {
             e.printStackTrace();
+            t = null;
         } catch (InvocationTargetException e) {
             e.printStackTrace();
+            t = null;
         }
         return t;
+    }
+
+    /**
+     * 设置数组的参数
+     *
+     * @param field
+     * @param list
+     * @param t
+     * @throws IllegalAccessException
+     */
+    private void setFieldArray(Field field, List list, Object t) throws IllegalAccessException {
+        Class<?> componentType = field.getType().getComponentType();
+        String type = field.getType().getComponentType().getName();
+        if (type.equals("int")) {
+            int[] nullArray = (int[]) Array.newInstance(componentType, list.size());
+            for (int i = 0; i < list.size(); i++) {
+                nullArray[i] = (Integer) list.get(i);
+            }
+            field.set(t, nullArray);
+        } else if (type.equals("double")) {
+            double[] nullArray = (double[]) Array.newInstance(componentType, list.size());
+            for (int i = 0; i < list.size(); i++) {
+                nullArray[i] = (Double) list.get(i);
+            }
+            field.set(t, nullArray);
+        } else if (type.equals("boolean")) {
+            boolean[] nullArray = (boolean[]) Array.newInstance(componentType, list.size());
+            for (int i = 0; i < list.size(); i++) {
+                nullArray[i] = (Boolean) list.get(i);
+            }
+            field.set(t, nullArray);
+        } else if (type.equals("short")) {
+            short[] nullArray = (short[]) Array.newInstance(componentType, list.size());
+            for (int i = 0; i < list.size(); i++) {
+                nullArray[i] = (Short) list.get(i);
+            }
+            field.set(t, nullArray);
+        } else if (type.equals("byte")) {
+            byte[] nullArray = (byte[]) Array.newInstance(componentType, list.size());
+            for (int i = 0; i < list.size(); i++) {
+                nullArray[i] = (Byte) list.get(i);
+            }
+            field.set(t, nullArray);
+        } else if (type.equals("long")) {
+            long[] nullArray = (long[]) Array.newInstance(componentType, list.size());
+            for (int i = 0; i < list.size(); i++) {
+                nullArray[i] = (Long) list.get(i);
+            }
+            field.set(t, nullArray);
+        } else if (type.equals("float")) {
+            float[] nullArray = (float[]) Array.newInstance(componentType, list.size());
+            for (int i = 0; i < list.size(); i++) {
+                nullArray[i] = (Float) list.get(i);
+            }
+            field.set(t, nullArray);
+        } else {
+            Object nullArray = Array.newInstance(componentType, list.size());
+            Object[] array = list.toArray((Object[]) nullArray);
+            field.set(t, array);
+        }
     }
 }
